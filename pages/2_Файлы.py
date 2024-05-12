@@ -12,6 +12,9 @@ import datetime
 import fitz
 import contextlib
 import base64
+import pandas as pd
+from math import ceil
+from langdetect import detect
 
 # CHANGE FOR CLOUD DEPLOY!!!!
 pytesseract.pytesseract.tesseract_cmd = None
@@ -24,6 +27,8 @@ def find_tesseract_binary() -> str:
 
 # INITIALISE VARIABLES #################################################################################################
 
+st.set_page_config(layout="wide")
+
 # pytesseract
 pytesseract.pytesseract.tesseract_cmd = find_tesseract_binary()
 if not pytesseract.pytesseract.tesseract_cmd:
@@ -31,7 +36,7 @@ if not pytesseract.pytesseract.tesseract_cmd:
 
 # firestore database
 db = firestore.client()
-bucket = storage.bucket('elmeto-12de0.appspot.com')
+bucket = storage.bucket('elmento-ru.appspot.com')
 
 # logged in parameter
 if 'logged_in' not in st.session_state:
@@ -74,9 +79,9 @@ def send_image_to_openai(image_bytes, api_key, key):
                   ]
                 }
               ],
-              "max_tokens": 100
+              "max_tokens": 1000
             }
-    if st.button("Get Explanation", key = key):
+    if st.button("Get Explanation", key = key, use_container_width=True):
         try:
             response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
             print(response.json())
@@ -95,10 +100,10 @@ def send_text_to_openai(text_content):
               "messages": [
                 {
                     "role": "user",
-                    "content": f"Summarise this text for me: ... {text_content}"
+                    "content": f"Having the output only in grammatically correct Russian language, summarise this text for me: ... {text_content}"
                 }
               ],
-              "max_tokens": 100
+              "max_tokens": 1000
             }
 
     try:
@@ -125,37 +130,43 @@ def get_summary(pdf_bytes, file_name):
         pdf_image = Image.open(io.BytesIO(image_data))
         pdf_images.append(pdf_image)
 
-        text = pytesseract.image_to_string(pdf_image)
+        text = pytesseract.image_to_string(pdf_image, lang= 'rus')
+        # lang = detect(text)
+        # st.write(lang)
         pdf_texts.append(text)
 
-    st.write(pdf_texts)
     send_text_to_openai(pdf_texts)
 
 
 def nav_page(page_name, timeout_secs=3):
-    nav_script = """
+    page_name_lower = page_name.lower()
+    nav_script = f"""
         <script type="text/javascript">
-            function attempt_nav_page(page_name, start_time, timeout_secs) {
+            function attempt_nav_page(page_name, start_time, timeout_secs) {{
                 var links = window.parent.document.getElementsByTagName("a");
-                for (var i = 0; i < links.length; i++) {
-                    if (links[i].href.toLowerCase().endsWith("/" + page_name.toLowerCase())) {
+                for (var i = 0; i < links.length; i++) {{
+                    var href = decodeURIComponent(links[i].href);
+                    if (href.toLowerCase().endsWith("/" + page_name)) {{
                         links[i].click();
                         return;
-                    }
-                }
-                var elasped = new Date() - start_time;
-                if (elasped < timeout_secs * 1000) {
-                    setTimeout(attempt_nav_page, 100, page_name, start_time, timeout_secs);
-                } else {
+                    }}
+                }}
+                var elapsed = new Date() - start_time;
+                if (elapsed < timeout_secs * 1000) {{
+                    setTimeout(function() {{
+                        attempt_nav_page(page_name, start_time, timeout_secs);
+                    }}, 100);
+                }} else {{
                     alert("Unable to navigate to page '" + page_name + "' after " + timeout_secs + " second(s).");
-                }
-            }
-            window.addEventListener("load", function() {
-                attempt_nav_page("%s", new Date(), %d);
-            });
+                }}
+            }}
+            window.addEventListener("load", function() {{
+                attempt_nav_page("{page_name_lower}", new Date(), {timeout_secs});
+            }});
         </script>
-    """ % (page_name, timeout_secs)
+    """
     html(nav_script)
+
 
 
 def get_existing_files():
@@ -244,7 +255,7 @@ def pdf_parse_content(pdf_bytes):
         pdf_image = Image.open(io.BytesIO(image_data))
         pdf_images.append(pdf_image)
 
-        text = pytesseract.image_to_string(pdf_image)
+        text = pytesseract.image_to_string(pdf_image, lang = 'rus')
         pdf_texts.append(text)
 
     st.session_state['username'] = username
@@ -265,7 +276,7 @@ def pdf_parse_content(pdf_bytes):
         'file_id' : file['doc_id']
     })
 
-    nav_page("chat_to_ai")
+    nav_page("Чат_с_ИИ")
 
 def upload_file(uploaded_file, thumbnail_stream):
     blob = bucket.blob(f"{username}/{uuid.uuid4()}_{uploaded_file.name}")
@@ -311,7 +322,7 @@ def delete_file(username, file_id):
 
 def display_file_with_thumbnail(file):
     if file.get('thumbnail_url'):
-        st.image(file['thumbnail_url'], caption=file['filename'], width=300)
+        st.image(file['thumbnail_url'], caption=file['filename'], width=200)
     else:
         st.markdown(f"[{file['filename']}]({file['url']})")
 
@@ -340,39 +351,82 @@ def get_img_blob(file):
     image_bytes = blob.download_as_bytes()
     return image_bytes
 
-st.title("Documents")
+st.title("Мои документы")
 
 if st.session_state.logged_in:
-    api_key = st.text_input("OpenAI API Key", key="file_qa_api_key", type="password")
+    secrets = st.secrets['openai-api-key']
+    api_key = secrets["OPEN_AI_KEY"]
+
+    #api_key = st.text_input("OpenAI API Key", key="file_qa_api_key", type="password")
     username = st.session_state.username
 
     files = get_existing_files()
     existing_file_names = [file['filename'] for file in files]  # List of existing file names
 
     with st.form("my-form", clear_on_submit=True):
-        uploaded_file = st.file_uploader("FILE UPLOADER")
-        submitted = st.form_submit_button("UPLOAD!")
+        uploaded_file = st.file_uploader("")
+        submitted = st.form_submit_button("Добавить в галерею")
 
-        if uploaded_file and uploaded_file.name not in existing_file_names:
+        if submitted and not uploaded_file:
+            st.error("Пожалуйста, загрузите файл перед нажатием кнопки 'Загрузите ваши файлы'")
+        elif uploaded_file and uploaded_file.name not in existing_file_names:
             file = upload_single_file(uploaded_file)
             uploaded_file = None  # Clear the uploaded file after handling
             st.experimental_rerun()
 
-    if files:
-        st.write(f'All files are:')
-        for file in files:
-            display_file_with_thumbnail(file)
-            if st.button("Delete", key=f"delete_{file['url']}"):
-                delete_file(username, file['doc_id'])  # Function to delete the file
-            file_extension = file['filename'].split(".")[-1].lower()
-            if file_extension in ["jpg", "jpeg", "png"]:
-                image_bytes = get_img_blob(file)
-                send_image_to_openai(image_bytes, api_key, key=f"chat_{file['url']}")
-            elif file_extension == "pdf":
-                pdf_bytes = get_img_blob(file)
-                if st.button("Chat to AI", key=f"chat_{file['url']}"):
-                    pdf_parse_content(pdf_bytes)
-                if st.button("Get Summary", key=f"chat_summary_{file['url']}"):
-                    get_summary(pdf_bytes, file['filename'])
+
+    controls = st.columns(2)
+    with controls[0]:
+        batch_size = st.select_slider("Batch size:", range(10, 110, 10))
+    row_size = 3
+    num_batches = ceil(len(files) / batch_size)
+    with controls[1]:
+        page = st.selectbox("Page", range(1, num_batches + 1))
+
+    # Sort the entire list of files based on the 'timestamp' key
+    files.sort(key=lambda x: x['uploaded_at'], reverse=True)
+    # Now slice the sorted list for the current page
+    batch = files[(page - 1) * batch_size: page * batch_size]
+
+    grid = st.columns(row_size)
+    col = 0
+
+    max_heights = [0] * row_size
+
+
+    for file in batch:
+        with grid[col]:
+            with st.container(height = 800):
+                if st.button("🗑️", key=f"delete_{file['url']}", type="secondary"):
+                    delete_file(username, file['doc_id'])  # Function to delete the file
+                # Row for the image
+                image_row = st.empty()
+
+                # Display the image in the image row
+                image_row.image(file['thumbnail_url'], caption=file['filename'])
+                # Create an empty slot
+                uploaded_at_slot = st.empty()
+
+                # Fill the slot with markdown representation of the text
+                uploaded_at_slot.markdown(file['uploaded_at'])
+                uploaded_at_slot.markdown(f"<span style='background-color: transparent;'>{file['uploaded_at']}</span>",
+                                          unsafe_allow_html=True)
+
+                # Place buttons in the button row
+                file_extension = file['filename'].split(".")[-1].lower()
+
+                if file_extension in ["jpg", "jpeg", "png"]:
+                    image_bytes = get_img_blob(file)
+                    send_image_to_openai(image_bytes, api_key, key=f"chat_{file['url']}")
+
+                elif file_extension == "pdf":
+                    pdf_bytes = get_img_blob(file)
+                    if st.button("Общение с ИИ", key=f"chat_{file['url']}", use_container_width=True):
+                        pdf_parse_content(pdf_bytes)
+                    if st.button("Получить сводку", key=f"chat_summary_{file['url']}", use_container_width=True):
+                        get_summary(pdf_bytes, file['filename'])
+
+        col = (col + 1) % row_size
+
 else:
-    st.write('Register please.')
+    st.write('Пожалуйста, войдите в систему или зарегистрируйтесь, чтобы просмотреть эту страницу.')
